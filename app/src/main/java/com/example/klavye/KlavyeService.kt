@@ -13,6 +13,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.LinearLayout
+import android.widget.PopupWindow
 import android.widget.ScrollView
 import android.widget.TextView
 import java.util.Locale
@@ -36,6 +37,12 @@ class KlavyeService : InputMethodService() {
         "1234567890",
         "@#₺_&-+()/",
         "*\"':;!?%=."
+    )
+
+    private val alts = mapOf(
+        'a' to "âäàáã", 'c' to "çć", 'e' to "éèêë", 'g' to "ğ", 'i' to "îíìï",
+        'o' to "öôòó", 's' to "ş", 'u' to "üûùú", 'n' to "ñ", 'y' to "ýÿ",
+        'z' to "ž", 'l' to "ł"
     )
 
     private val emojis: List<String> = run {
@@ -85,14 +92,14 @@ class KlavyeService : InputMethodService() {
         val isSym = page == Page.SYMBOLS
         val rows = if (isSym) syms else letters
 
-        c.addView(row(rows[0].map { keyText(it) }))
-        c.addView(row(rows[1].map { keyText(it) }))
+        c.addView(row(rows[0].map { letterKey(it) }))
+        c.addView(row(rows[1].map { letterKey(it) }))
 
         val third = mutableListOf<View>()
         third += special(if (isSym) "" else "⇧", 1.5f, active = shift && !isSym) {
             if (!isSym) handler.post { shift = !shift; render() }
         }
-        third += rows[2].map { keyText(it) }
+        third += rows[2].map { letterKey(it) }
         third += special("⌫", 1.5f, repeat = true) { backspace() }
         c.addView(row(third))
 
@@ -131,12 +138,99 @@ class KlavyeService : InputMethodService() {
         setOnClickListener { type(e) }
     }
 
-    private fun keyText(c: Char): View {
-        val label = if (shift && page == Page.LETTERS) c.toString().uppercase(tr) else c.toString()
-        return special(label, 1f) {
-            type(label)
-            if (shift) { shift = false; handler.post { render() } }
+    private fun commitLetter(s: String) {
+        type(s)
+        if (shift) { shift = false; handler.post { render() } }
+    }
+
+    private fun letterKey(c: Char): View {
+        val upper = shift && page == Page.LETTERS
+        val label = if (upper) c.toString().uppercase(tr) else c.toString()
+        val options = if (page == Page.LETTERS) (alts[c] ?: "") else ""
+        if (options.isEmpty()) return special(label, 1f) { commitLetter(label) }
+
+        val choices = options.map { if (upper) it.toString().uppercase(tr) else it.toString() }
+        val key = special(label, 1f) { }
+        var popup: PopupWindow? = null
+        var longPressed = false
+        var selected = 0
+        var popupLeft = 0
+        val cells = mutableListOf<TextView>()
+
+        fun highlight() {
+            cells.forEachIndexed { i, t ->
+                t.setBackgroundColor(if (i == selected) Color.parseColor("#4F6BED") else Color.TRANSPARENT)
+            }
         }
+
+        val show = Runnable {
+            longPressed = true
+            key.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            val box = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(10).toFloat()
+                    setColor(Color.parseColor("#3B3D47"))
+                }
+            }
+            cells.clear()
+            choices.forEach { ch ->
+                val t = TextView(this).apply {
+                    text = ch
+                    textSize = 22f
+                    setTextColor(Color.WHITE)
+                    gravity = Gravity.CENTER
+                    layoutParams = LinearLayout.LayoutParams(dp(44), dp(48))
+                }
+                cells += t
+                box.addView(t)
+            }
+            box.measure(0, 0)
+            val loc = IntArray(2)
+            key.getLocationOnScreen(loc)
+            val screenW = resources.displayMetrics.widthPixels
+            popupLeft = (loc[0] + key.width / 2 - box.measuredWidth / 2)
+                .coerceIn(0, maxOf(0, screenW - box.measuredWidth))
+            val p = PopupWindow(box, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            p.isTouchable = false
+            p.showAtLocation(key, Gravity.NO_GRAVITY, popupLeft, loc[1] - box.measuredHeight - dp(6))
+            popup = p
+            selected = 0
+            highlight()
+        }
+
+        key.setOnTouchListener { v, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    longPressed = false
+                    v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    handler.postDelayed(show, 350)
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (longPressed) {
+                        selected = ((e.rawX - popupLeft - dp(4)) / dp(44)).toInt()
+                            .coerceIn(0, choices.size - 1)
+                        highlight()
+                    }
+                }
+                MotionEvent.ACTION_UP -> {
+                    handler.removeCallbacks(show)
+                    if (longPressed) commitLetter(choices[selected]) else commitLetter(label)
+                    longPressed = false
+                    popup?.dismiss()
+                    popup = null
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    handler.removeCallbacks(show)
+                    longPressed = false
+                    popup?.dismiss()
+                    popup = null
+                }
+            }
+            true
+        }
+        return key
     }
 
     private fun row(keys: List<View>) = LinearLayout(this).apply {
