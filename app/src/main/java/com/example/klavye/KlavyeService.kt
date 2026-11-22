@@ -539,4 +539,114 @@ class KlavyeService : InputMethodService() {
                     setTextColor(Color.WHITE)
                     gravity = Gravity.CENTER
                     layoutParams = LinearLayout.LayoutParams(dp(44), dp(48))
+                }
+                cells += t
+                box.addView(t)
+            }
+            box.measure(0, 0)
+            val loc = IntArray(2)
+            key.getLocationOnScreen(loc)
+            val screenW = resources.displayMetrics.widthPixels
+            popupLeft = (loc[0] + key.width / 2 - box.measuredWidth / 2)
+                .coerceIn(0, maxOf(0, screenW - box.measuredWidth))
+            val p = PopupWindow(box, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            p.isTouchable = false
+            p.showAtLocation(key, Gravity.NO_GRAVITY, popupLeft, loc[1] - box.measuredHeight - dp(6))
+            popup = p
+            selected = 0
+            highlight()
+        }
+
+        key.setOnTouchListener { v, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    longPressed = false
+                    v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    handler.postDelayed(show, 350)
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (longPressed) {
+                        selected = ((e.rawX - popupLeft - dp(4)) / dp(44)).toInt()
+                            .coerceIn(0, choices.size - 1)
+                        highlight()
+                    }
+                }
+                MotionEvent.ACTION_UP -> {
+                    handler.removeCallbacks(show)
+                    if (longPressed) commitLetter(choices[selected]) else commitLetter(label)
+                    longPressed = false
+                    popup?.dismiss()
+                    popup = null
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    handler.removeCallbacks(show)
+                    longPressed = false
+                    popup?.dismiss()
+                    popup = null
+                }
+            }
+            true
+        }
+        return key
+    }
+
+    private fun row(keys: List<View>) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER
+        keys.forEach { addView(it) }
+    }
+
+    private fun special(
+        label: String, weight: Float, active: Boolean = false,
+        repeat: Boolean = false, action: () -> Unit
+    ): View = TextView(this).apply {
+        text = label
+        textSize = 20f
+        setTextColor(Color.WHITE)
+        gravity = Gravity.CENTER
+        layoutParams = LinearLayout.LayoutParams(0, dp(52), weight).apply { setMargins(4, 5, 4, 5) }
+        background = GradientDrawable().apply {
+            cornerRadius = dp(8).toFloat()
+            setColor(Color.parseColor(if (active) "#4F6BED" else "#2E2F36"))
+        }
+        val tick = object : Runnable {
+            override fun run() { action(); handler.postDelayed(this, 60) }
+        }
+        setOnTouchListener { v, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    action()
+                    if (repeat) handler.postDelayed(tick, 400)
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> handler.removeCallbacks(tick)
+            }
+            true
+        }
+    }
+
+    private fun type(s: String) { currentInputConnection?.commitText(s, 1) }
+
+    private fun backspace() {
+        val ic = currentInputConnection ?: return
+        if (ic.getSelectedText(0).isNullOrEmpty()) ic.deleteSurroundingText(1, 0)
+        else ic.commitText("", 1)
+    }
+
+    private fun enter() {
+        val ic = currentInputConnection ?: return
+        val opts = currentInputEditorInfo?.imeOptions ?: 0
+        val action = opts and EditorInfo.IME_MASK_ACTION
+        val noEnterAction = (opts and EditorInfo.IME_FLAG_NO_ENTER_ACTION) != 0
+        if (!noEnterAction &&
+            action != EditorInfo.IME_ACTION_NONE && action != EditorInfo.IME_ACTION_UNSPECIFIED) {
+            ic.performEditorAction(action)
+        } else {
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+        }
+    }
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+}
         
